@@ -418,14 +418,14 @@ class BleScanner(private val context: Context) {
     /**
      * Parse Apple Continuity TLV structure to extract device type.
      *
-     * The manufacturer data after company ID 0x004C contains one or more TLV entries:
-     *   [type][length][data...]
+     * The manufacturer data after company ID 0x004C contains TLV entries:
+     * type (1 byte) + length (1 byte) + data (N bytes), repeated.
      *
      * We look for Nearby Info (type 0x10). Its first data byte encodes:
-     *   - Upper nibble (bits 4-7): Activity/status flags
-     *   - Lower nibble (bits 0-3): Device type
+     * - Upper nibble (bits 4-7): Activity/status flags
+     * - Lower nibble (bits 0-3): Device type
      *
-     * Returns: model string (e.g., "iPhone", "iPad", "Mac") or null
+     * Returns model string ("iPhone", "iPad", "Mac") or null.
      */
     private fun parseAppleContinuity(mfgBytes: ByteArray): String? {
         var offset = 0
@@ -621,7 +621,10 @@ class BleScanner(private val context: Context) {
     private fun stdDev(values: List<Int>): Double {
         if (values.size < 2) return 0.0
         val mean = values.average()
-        val variance = values.sumOf { (it - mean).pow(2) } / (values.size - 1)
-        return sqrt(variance)
+        val sumSquares = values.fold(0.0) { acc, v ->
+            val diff = v.toDouble() - mean
+            acc + diff * diff
+        }
+        return sqrt(sumSquares / (values.size - 1))
     }
 }
