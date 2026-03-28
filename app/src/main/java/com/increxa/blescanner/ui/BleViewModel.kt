@@ -16,7 +16,6 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.TimeZone
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class BleViewModel(application: Application) : AndroidViewModel(application) {
@@ -53,6 +52,9 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
     val totalScanResults: StateFlow<Int> = repository.getTotalScanResults()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
+    val avgConfidence: StateFlow<Int?> = repository.getAvgConfidence()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
     fun onScanStarted(sessionId: String) {
         isScanning.value = true
         currentSessionId.value = sessionId
@@ -66,13 +68,12 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
 
-            // Get aggregated device data (1 row per unique device)
             val devices = repository.getDevicesForExport()
             val session = repository.getLatestSession()
 
             val csv = buildString {
-                // Header with human-readable column names
-                appendLine("dispositivo_id,marca,nombre,tipo,primera_deteccion,ultima_deteccion,permanencia_segundos,veces_detectado,sesion_latitud,sesion_longitud")
+                // Professional CSV header
+                appendLine("dispositivo_id,marca,modelo,nombre_dispositivo,primera_deteccion,ultima_deteccion,permanencia_segundos,veces_detectado,rssi_promedio,confianza_pct,es_exhibicion,sesion_latitud,sesion_longitud")
 
                 devices.forEach { d ->
                     val firstSeen = dateFormat.format(Date(d.firstSeenAt))
@@ -80,11 +81,12 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
                     val dwellSeconds = d.totalDurationMs / 1000
                     val safeName = (d.deviceName ?: "").replace(",", " ").replace("\"", "")
                     val brand = (d.brand ?: "Desconocida").replace(",", " ")
-                    val tipo = d.deviceType ?: "phone"
+                    val model = (d.model ?: "").replace(",", " ")
                     val lat = session?.locationLat?.let { String.format(Locale.US, "%.6f", it) } ?: ""
                     val lng = session?.locationLng?.let { String.format(Locale.US, "%.6f", it) } ?: ""
+                    val exhib = if (d.isStationary) "SI" else "NO"
 
-                    appendLine("${d.macAddress},$brand,$safeName,$tipo,$firstSeen,$lastSeen,$dwellSeconds,${d.scanCount},$lat,$lng")
+                    appendLine("${d.macAddress},$brand,$model,$safeName,$firstSeen,$lastSeen,$dwellSeconds,${d.scanCount},${d.avgRssi},${d.confidenceScore},$exhib,$lat,$lng")
                 }
             }
             onResult(csv)

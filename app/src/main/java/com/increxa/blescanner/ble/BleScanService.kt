@@ -158,7 +158,7 @@ class BleScanService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val text = if (deviceCount > 0) "$deviceCount telefonos detectados (~3m)"
+        val text = if (deviceCount > 0) "$deviceCount celulares detectados (1.5m)"
         else getString(R.string.scan_notification_text)
 
         return Notification.Builder(this, CHANNEL_ID)

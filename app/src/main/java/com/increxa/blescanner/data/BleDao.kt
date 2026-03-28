@@ -34,10 +34,23 @@ interface BleDao {
             lastSeenAt = :lastSeenAt,
             scanCount = scanCount + 1,
             deviceName = COALESCE(:deviceName, deviceName),
-            brand = CASE WHEN :brand != 'Desconocida' THEN :brand ELSE brand END
+            brand = CASE WHEN :brand != 'Desconocida' THEN :brand ELSE brand END,
+            model = COALESCE(:model, model),
+            avgRssi = :avgRssi,
+            confidenceScore = CASE WHEN :confidenceScore > confidenceScore THEN :confidenceScore ELSE confidenceScore END,
+            isStationary = :isStationary
         WHERE macAddress = :macAddress
     """)
-    suspend fun updateDeviceSeen(macAddress: String, lastSeenAt: Long, deviceName: String?, brand: String?)
+    suspend fun updateDeviceSeen(
+        macAddress: String,
+        lastSeenAt: Long,
+        deviceName: String?,
+        brand: String?,
+        model: String?,
+        avgRssi: Int,
+        confidenceScore: Int,
+        isStationary: Boolean
+    )
 
     @Query("UPDATE ble_devices SET totalDurationMs = totalDurationMs + :additionalMs WHERE macAddress = :macAddress")
     suspend fun addDeviceDuration(macAddress: String, additionalMs: Long)
@@ -70,6 +83,9 @@ interface BleDao {
 
     @Query("SELECT COUNT(*) FROM ble_scan_results")
     fun getTotalScanResults(): Flow<Int>
+
+    @Query("SELECT AVG(confidenceScore) FROM ble_devices WHERE confidenceScore > 0")
+    fun getAvgConfidence(): Flow<Int?>
 
     // === Export ===
     @Query("SELECT * FROM ble_scan_results WHERE sessionId = :sessionId ORDER BY timestamp ASC")

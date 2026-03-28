@@ -21,10 +21,14 @@ data class BleDevice(
     val deviceName: String? = null,
     val deviceType: String? = null,
     val brand: String? = null,
+    val model: String? = null,
     val firstSeenAt: Long,
     val lastSeenAt: Long,
     val totalDurationMs: Long = 0,
-    val scanCount: Int = 0
+    val scanCount: Int = 0,
+    val avgRssi: Int = 0,
+    val confidenceScore: Int = 0,
+    val isStationary: Boolean = false
 )
 
 @Entity(
@@ -51,5 +55,22 @@ data class BleScanResult(
     val estimatedDistanceM: Double,
     val txPower: Int? = null,
     val timestamp: Long,
-    val sessionId: String
+    val sessionId: String,
+    val model: String? = null
+)
+
+data class ScanData(
+    val macAddress: String,
+    val deviceName: String?,
+    val deviceType: String,
+    val brand: String,
+    val model: String?,
+    val rssi: Int,
+    val avgRssi: Int,
+    val rssiVariance: Double,
+    val estimatedDistanceM: Double,
+    val txPower: Int?,
+    val confidenceScore: Int,
+    val detectionCount: Int,
+    val isStationary: Boolean
 )

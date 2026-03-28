@@ -149,7 +149,7 @@ class MainActivity : ComponentActivity() {
 
         bindService(Intent(this, BleScanService::class.java), serviceConnection, Context.BIND_AUTO_CREATE)
 
-        Toast.makeText(this, "Escaneando telefonos cercanos (2-3m)", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Escaneando celulares cercanos (1.5m)", Toast.LENGTH_SHORT).show()
     }
 
     private fun stopScan() {

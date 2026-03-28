@@ -25,6 +25,7 @@ class BleRepository(private val dao: BleDao) {
     fun getTotalUniqueDevices(): Flow<Int> = dao.getTotalUniqueDevices()
     fun getAvgDwellTimeMs(): Flow<Long?> = dao.getAvgDwellTimeMs()
     fun getTotalScanResults(): Flow<Int> = dao.getTotalScanResults()
+    fun getAvgConfidence(): Flow<Int?> = dao.getAvgConfidence()
     fun getAllSessions(): Flow<List<BleSession>> = dao.getAllSessions()
 
     suspend fun startSession(sessionId: String, lat: Double?, lng: Double?, notes: String? = null) {
@@ -54,13 +55,26 @@ class BleRepository(private val dao: BleDao) {
                     deviceName = scan.deviceName,
                     deviceType = scan.deviceType,
                     brand = scan.brand,
+                    model = scan.model,
                     firstSeenAt = now,
                     lastSeenAt = now,
                     totalDurationMs = 0,
-                    scanCount = 1
+                    scanCount = 1,
+                    avgRssi = scan.avgRssi,
+                    confidenceScore = scan.confidenceScore,
+                    isStationary = scan.isStationary
                 )
             )
-            dao.updateDeviceSeen(scan.macAddress, now, scan.deviceName, scan.brand)
+            dao.updateDeviceSeen(
+                macAddress = scan.macAddress,
+                lastSeenAt = now,
+                deviceName = scan.deviceName,
+                brand = scan.brand,
+                model = scan.model,
+                avgRssi = scan.avgRssi,
+                confidenceScore = scan.confidenceScore,
+                isStationary = scan.isStationary
+            )
 
             val presenceStart = devicePresenceStart[scan.macAddress]
             if (presenceStart != null) {
@@ -84,7 +98,8 @@ class BleRepository(private val dao: BleDao) {
                 estimatedDistanceM = scan.estimatedDistanceM,
                 txPower = scan.txPower,
                 timestamp = now,
-                sessionId = sessionId
+                sessionId = sessionId,
+                model = scan.model
             )
         }
         if (scanResults.isNotEmpty()) {
@@ -109,13 +124,3 @@ class BleRepository(private val dao: BleDao) {
         dao.deleteDevicesBefore(cutoff)
     }
 }
-
-data class ScanData(
-    val macAddress: String,
-    val deviceName: String?,
-    val deviceType: String?,
-    val brand: String,
-    val rssi: Int,
-    val estimatedDistanceM: Double,
-    val txPower: Int?
-)
