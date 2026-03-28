@@ -7,7 +7,7 @@ import androidx.room.RoomDatabase
 
 @Database(
     entities = [BleDevice::class, BleScanResult::class, BleSession::class],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class BleDatabase : RoomDatabase() {
@@ -24,7 +24,9 @@ abstract class BleDatabase : RoomDatabase() {
                     context.applicationContext,
                     BleDatabase::class.java,
                     "ble_scanner.db"
-                ).build()
+                )
+                    .fallbackToDestructiveMigration()
+                    .build()
                 INSTANCE = instance
                 instance
             }

@@ -19,6 +19,12 @@ interface BleDao {
     @Query("SELECT * FROM ble_sessions ORDER BY startTime DESC")
     fun getAllSessions(): Flow<List<BleSession>>
 
+    @Query("SELECT * FROM ble_sessions WHERE sessionId = :sessionId")
+    suspend fun getSessionById(sessionId: String): BleSession?
+
+    @Query("SELECT * FROM ble_sessions ORDER BY startTime DESC LIMIT 1")
+    suspend fun getLatestSession(): BleSession?
+
     // === Devices ===
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertDeviceIfNew(device: BleDevice)
@@ -27,20 +33,20 @@ interface BleDao {
         UPDATE ble_devices SET
             lastSeenAt = :lastSeenAt,
             scanCount = scanCount + 1,
-            deviceName = COALESCE(:deviceName, deviceName)
+            deviceName = COALESCE(:deviceName, deviceName),
+            brand = CASE WHEN :brand != 'Desconocida' THEN :brand ELSE brand END
         WHERE macAddress = :macAddress
     """)
-    suspend fun updateDeviceSeen(macAddress: String, lastSeenAt: Long, deviceName: String?)
+    suspend fun updateDeviceSeen(macAddress: String, lastSeenAt: Long, deviceName: String?, brand: String?)
 
-    @Query("""
-        UPDATE ble_devices SET
-            totalDurationMs = totalDurationMs + :additionalMs
-        WHERE macAddress = :macAddress
-    """)
+    @Query("UPDATE ble_devices SET totalDurationMs = totalDurationMs + :additionalMs WHERE macAddress = :macAddress")
     suspend fun addDeviceDuration(macAddress: String, additionalMs: Long)
 
     @Query("SELECT * FROM ble_devices ORDER BY lastSeenAt DESC")
     fun getAllDevices(): Flow<List<BleDevice>>
+
+    @Query("SELECT * FROM ble_devices ORDER BY lastSeenAt DESC")
+    suspend fun getAllDevicesForExport(): List<BleDevice>
 
     @Query("SELECT COUNT(*) FROM ble_devices WHERE lastSeenAt > :since")
     fun getActiveDeviceCount(since: Long): Flow<Int>
@@ -50,13 +56,7 @@ interface BleDao {
 
     // === Scan Results ===
     @Insert
-    suspend fun insertScanResult(result: BleScanResult)
-
-    @Insert
     suspend fun insertScanResults(results: List<BleScanResult>)
-
-    @Query("SELECT * FROM ble_scan_results WHERE sessionId = :sessionId ORDER BY timestamp DESC")
-    fun getScanResultsForSession(sessionId: String): Flow<List<BleScanResult>>
 
     @Query("SELECT COUNT(DISTINCT macAddress) FROM ble_scan_results WHERE sessionId = :sessionId")
     fun getUniqueDevicesInSession(sessionId: String): Flow<Int>
@@ -72,21 +72,10 @@ interface BleDao {
     fun getTotalScanResults(): Flow<Int>
 
     // === Export ===
-    @Query("""
-        SELECT r.*, d.deviceType
-        FROM ble_scan_results r
-        LEFT JOIN ble_devices d ON r.macAddress = d.macAddress
-        WHERE r.sessionId = :sessionId
-        ORDER BY r.timestamp ASC
-    """)
+    @Query("SELECT * FROM ble_scan_results WHERE sessionId = :sessionId ORDER BY timestamp ASC")
     suspend fun getExportDataForSession(sessionId: String): List<BleScanResult>
 
-    @Query("""
-        SELECT r.*, d.deviceType
-        FROM ble_scan_results r
-        LEFT JOIN ble_devices d ON r.macAddress = d.macAddress
-        ORDER BY r.timestamp ASC
-    """)
+    @Query("SELECT * FROM ble_scan_results ORDER BY timestamp ASC")
     suspend fun getAllExportData(): List<BleScanResult>
 
     // === Cleanup ===

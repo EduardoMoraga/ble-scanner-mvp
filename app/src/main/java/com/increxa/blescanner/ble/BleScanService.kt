@@ -61,32 +61,35 @@ class BleScanService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START -> startScanning()
+            ACTION_START -> {
+                val sessionId = intent.getStringExtra("session_id") ?: "session_${System.currentTimeMillis()}"
+                val lat = intent.getDoubleExtra("lat", Double.NaN)
+                val lng = intent.getDoubleExtra("lng", Double.NaN)
+                startScanning(
+                    sessionId,
+                    if (lat.isNaN()) null else lat,
+                    if (lng.isNaN()) null else lng
+                )
+            }
             ACTION_STOP -> stopScanning()
         }
         return START_STICKY
     }
 
-    fun startScanning(sessionId: String? = null) {
+    fun startScanning(sessionId: String? = null, lat: Double? = null, lng: Double? = null) {
         currentSessionId = sessionId ?: "session_${System.currentTimeMillis()}"
 
-        // Start foreground with notification
         startForeground(NOTIFICATION_ID, createNotification())
 
-        // Start the BLE scan
         val started = bleScanner.startScan()
         _isScanning.value = started
 
         if (started) {
             Log.i(TAG, "Scanning started, session: $currentSessionId")
-
-            // Create session in DB
             serviceScope.launch {
                 val app = application as BleApplication
-                app.repository.startSession(currentSessionId!!)
+                app.repository.startSession(currentSessionId!!, lat, lng)
             }
-
-            // Start batch processing loop
             startBatchProcessor()
         } else {
             Log.e(TAG, "Failed to start BLE scan")
@@ -99,10 +102,8 @@ class BleScanService : Service() {
         _isScanning.value = false
         batchJob?.cancel()
 
-        // End session
         currentSessionId?.let { sid ->
             serviceScope.launch {
-                // Flush remaining buffer
                 processBatch()
                 val app = application as BleApplication
                 app.repository.endSession(sid)
@@ -111,7 +112,6 @@ class BleScanService : Service() {
 
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
-        Log.i(TAG, "Scanning stopped")
     }
 
     private fun startBatchProcessor() {
@@ -134,7 +134,6 @@ class BleScanService : Service() {
         val app = application as BleApplication
         app.repository.recordScanBatch(results, sid)
 
-        // Update notification with count
         val notification = createNotification(results.size)
         val nm = getSystemService(NotificationManager::class.java)
         nm.notify(NOTIFICATION_ID, notification)
@@ -149,23 +148,18 @@ class BleScanService : Service() {
             description = getString(R.string.channel_description)
             setShowBadge(false)
         }
-        val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(channel)
+        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
     private fun createNotification(deviceCount: Int = 0): Notification {
         val pendingIntent = PendingIntent.getActivity(
-            this,
-            0,
+            this, 0,
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val text = if (deviceCount > 0) {
-            "$deviceCount dispositivos detectados"
-        } else {
-            getString(R.string.scan_notification_text)
-        }
+        val text = if (deviceCount > 0) "$deviceCount telefonos detectados (~3m)"
+        else getString(R.string.scan_notification_text)
 
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.scan_notification_title))

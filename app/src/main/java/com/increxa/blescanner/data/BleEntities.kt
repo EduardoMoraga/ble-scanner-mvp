@@ -20,6 +20,7 @@ data class BleDevice(
     @PrimaryKey val macAddress: String,
     val deviceName: String? = null,
     val deviceType: String? = null,
+    val brand: String? = null,
     val firstSeenAt: Long,
     val lastSeenAt: Long,
     val totalDurationMs: Long = 0,

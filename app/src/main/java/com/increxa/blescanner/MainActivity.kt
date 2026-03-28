@@ -1,6 +1,7 @@
 package com.increxa.blescanner
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.content.ComponentName
@@ -8,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.location.LocationManager
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
@@ -54,31 +56,22 @@ class MainActivity : ComponentActivity() {
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        val allGranted = permissions.all { it.value }
-        if (allGranted) {
+        if (permissions.all { it.value }) {
             checkBluetoothAndStartScan()
         } else {
-            Toast.makeText(
-                this,
-                "Se necesitan todos los permisos para escanear BLE",
-                Toast.LENGTH_LONG
-            ).show()
+            Toast.makeText(this, "Se necesitan todos los permisos para escanear", Toast.LENGTH_LONG).show()
         }
     }
 
     private val bluetoothEnableLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == RESULT_OK) {
-            doStartScan()
-        } else {
-            Toast.makeText(this, "Bluetooth debe estar activado", Toast.LENGTH_SHORT).show()
-        }
+        if (result.resultCode == RESULT_OK) doStartScan()
+        else Toast.makeText(this, "Bluetooth debe estar activado", Toast.LENGTH_SHORT).show()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         setContent {
             MaterialTheme {
                 MainScreen(
@@ -93,9 +86,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        // Bind to service if it's running
-        Intent(this, BleScanService::class.java).also { intent ->
-            bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+        Intent(this, BleScanService::class.java).also {
+            bindService(it, serviceConnection, Context.BIND_AUTO_CREATE)
         }
     }
 
@@ -108,58 +100,56 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestPermissionsAndScan() {
-        val missingPermissions = requiredPermissions.filter {
+        val missing = requiredPermissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
-
-        if (missingPermissions.isEmpty()) {
-            checkBluetoothAndStartScan()
-        } else {
-            permissionLauncher.launch(missingPermissions.toTypedArray())
-        }
+        if (missing.isEmpty()) checkBluetoothAndStartScan()
+        else permissionLauncher.launch(missing.toTypedArray())
     }
 
     private fun checkBluetoothAndStartScan() {
-        val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-        val adapter = bluetoothManager.adapter
-
+        val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
         if (adapter == null) {
             Toast.makeText(this, "Este dispositivo no tiene Bluetooth", Toast.LENGTH_LONG).show()
             return
         }
-
         if (!adapter.isEnabled) {
-            val enableIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
-            bluetoothEnableLauncher.launch(enableIntent)
+            bluetoothEnableLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
             return
         }
-
         doStartScan()
     }
 
+    @SuppressLint("MissingPermission")
     private fun doStartScan() {
         val sessionId = "session_${System.currentTimeMillis()}"
+
+        // Capture GPS location for the session
+        var lat: Double? = null
+        var lng: Double? = null
+        try {
+            val locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            val location = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                ?: locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+            if (location != null) {
+                lat = location.latitude
+                lng = location.longitude
+            }
+        } catch (_: Exception) {}
+
         viewModel.onScanStarted(sessionId)
 
         val intent = Intent(this, BleScanService::class.java).apply {
             action = BleScanService.ACTION_START
+            putExtra("session_id", sessionId)
+            putExtra("lat", lat ?: Double.NaN)
+            putExtra("lng", lng ?: Double.NaN)
         }
         startForegroundService(intent)
 
-        // Bind to get reference
-        bindService(
-            Intent(this, BleScanService::class.java),
-            serviceConnection,
-            Context.BIND_AUTO_CREATE
-        )
+        bindService(Intent(this, BleScanService::class.java), serviceConnection, Context.BIND_AUTO_CREATE)
 
-        // Start scanning through service
-        scanService?.startScanning(sessionId)
-            ?: run {
-                // Service not yet bound — it will start via onStartCommand
-            }
-
-        Toast.makeText(this, "Escaneo BLE iniciado", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Escaneando telefonos cercanos (2-3m)", Toast.LENGTH_SHORT).show()
     }
 
     private fun stopScan() {
@@ -176,9 +166,7 @@ class MainActivity : ComponentActivity() {
                 }
                 return@getExportData
             }
-            runOnUiThread {
-                DataExporter.exportAndShare(this, csvContent)
-            }
+            runOnUiThread { DataExporter.exportAndShare(this, csvContent) }
         }
     }
 }

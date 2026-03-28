@@ -5,13 +5,10 @@ import kotlinx.coroutines.flow.Flow
 class BleRepository(private val dao: BleDao) {
 
     companion object {
-        // Device considered "active" if seen in last 30 seconds
         const val ACTIVE_THRESHOLD_MS = 30_000L
-        // Device considered "gone" if not seen for 60 seconds
         const val GONE_THRESHOLD_MS = 60_000L
     }
 
-    // Track when each device was last "seen" for permanence calculation
     private val devicePresenceStart = mutableMapOf<String, Long>()
 
     fun getActiveDevices(): Flow<List<BleDevice>> {
@@ -25,20 +22,18 @@ class BleRepository(private val dao: BleDao) {
     }
 
     fun getAllDevices(): Flow<List<BleDevice>> = dao.getAllDevices()
-
     fun getTotalUniqueDevices(): Flow<Int> = dao.getTotalUniqueDevices()
-
     fun getAvgDwellTimeMs(): Flow<Long?> = dao.getAvgDwellTimeMs()
-
     fun getTotalScanResults(): Flow<Int> = dao.getTotalScanResults()
-
     fun getAllSessions(): Flow<List<BleSession>> = dao.getAllSessions()
 
-    suspend fun startSession(sessionId: String, notes: String? = null) {
+    suspend fun startSession(sessionId: String, lat: Double?, lng: Double?, notes: String? = null) {
         dao.insertSession(
             BleSession(
                 sessionId = sessionId,
                 startTime = System.currentTimeMillis(),
+                locationLat = lat,
+                locationLng = lng,
                 notes = notes
             )
         )
@@ -46,37 +41,31 @@ class BleRepository(private val dao: BleDao) {
 
     suspend fun endSession(sessionId: String) {
         dao.endSession(sessionId, System.currentTimeMillis())
-        // Flush permanence for all tracked devices
-        flushAllPermanence()
+        devicePresenceStart.clear()
     }
 
-    suspend fun recordScanBatch(
-        results: List<ScanData>,
-        sessionId: String
-    ) {
+    suspend fun recordScanBatch(results: List<ScanData>, sessionId: String) {
         val now = System.currentTimeMillis()
 
         for (scan in results) {
-            // Upsert device
             dao.insertDeviceIfNew(
                 BleDevice(
                     macAddress = scan.macAddress,
                     deviceName = scan.deviceName,
                     deviceType = scan.deviceType,
+                    brand = scan.brand,
                     firstSeenAt = now,
                     lastSeenAt = now,
                     totalDurationMs = 0,
                     scanCount = 1
                 )
             )
-            dao.updateDeviceSeen(scan.macAddress, now, scan.deviceName)
+            dao.updateDeviceSeen(scan.macAddress, now, scan.deviceName, scan.brand)
 
-            // Track permanence: if device was already present, accumulate
             val presenceStart = devicePresenceStart[scan.macAddress]
             if (presenceStart != null) {
                 val elapsed = now - presenceStart
                 if (elapsed > GONE_THRESHOLD_MS) {
-                    // Device was gone and came back — start new permanence window
                     devicePresenceStart[scan.macAddress] = now
                 } else {
                     dao.addDeviceDuration(scan.macAddress, elapsed)
@@ -87,7 +76,6 @@ class BleRepository(private val dao: BleDao) {
             }
         }
 
-        // Batch insert scan results
         val scanResults = results.map { scan ->
             BleScanResult(
                 macAddress = scan.macAddress,
@@ -104,17 +92,16 @@ class BleRepository(private val dao: BleDao) {
         }
     }
 
-    private suspend fun flushAllPermanence() {
-        devicePresenceStart.clear()
+    suspend fun getExportData(sessionId: String? = null): List<BleScanResult> {
+        return if (sessionId != null) dao.getExportDataForSession(sessionId)
+        else dao.getAllExportData()
     }
 
-    suspend fun getExportData(sessionId: String? = null): List<BleScanResult> {
-        return if (sessionId != null) {
-            dao.getExportDataForSession(sessionId)
-        } else {
-            dao.getAllExportData()
-        }
-    }
+    suspend fun getDevicesForExport(): List<BleDevice> = dao.getAllDevicesForExport()
+
+    suspend fun getSessionForExport(sessionId: String): BleSession? = dao.getSessionById(sessionId)
+
+    suspend fun getLatestSession(): BleSession? = dao.getLatestSession()
 
     suspend fun cleanup(olderThanDays: Int = 7) {
         val cutoff = System.currentTimeMillis() - (olderThanDays * 24 * 60 * 60 * 1000L)
@@ -127,6 +114,7 @@ data class ScanData(
     val macAddress: String,
     val deviceName: String?,
     val deviceType: String?,
+    val brand: String,
     val rssi: Int,
     val estimatedDistanceM: Double,
     val txPower: Int?

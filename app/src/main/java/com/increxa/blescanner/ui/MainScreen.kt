@@ -16,13 +16,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BluetoothSearching
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.SignalCellularAlt
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -71,18 +70,19 @@ fun MainScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("BLE Scanner", fontWeight = FontWeight.Bold) },
+                title = {
+                    Column {
+                        Text("BLE Scanner", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                        Text("Solo telefonos | Radio ~3m", fontSize = 11.sp, color = Color.White.copy(alpha = 0.7f))
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = Color(0xFF1565C0),
                     titleContentColor = Color.White
                 ),
                 actions = {
                     IconButton(onClick = onExport) {
-                        Icon(
-                            Icons.Default.Download,
-                            contentDescription = "Exportar CSV",
-                            tint = Color.White
-                        )
+                        Icon(Icons.Default.Download, contentDescription = "Exportar CSV", tint = Color.White)
                     }
                 }
             )
@@ -106,7 +106,6 @@ fun MainScreen(
                 .padding(padding)
                 .background(Color(0xFFF5F5F5))
         ) {
-            // Stats cards
             StatsRow(
                 activeCount = activeDevices.size,
                 totalUnique = totalUnique,
@@ -115,32 +114,19 @@ fun MainScreen(
                 isScanning = isScanning
             )
 
-            // Device list
             Text(
-                "Dispositivos detectados",
+                "Telefonos detectados (~3m)",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
             )
 
             if (activeDevices.isEmpty() && !isScanning) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            Icons.Default.BluetoothSearching,
-                            contentDescription = null,
-                            modifier = Modifier.size(64.dp),
-                            tint = Color.Gray
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            "Presiona Play para escanear",
-                            color = Color.Gray,
-                            fontSize = 16.sp
-                        )
+                        Icon(Icons.Default.BluetoothSearching, null, Modifier.size(64.dp), tint = Color.Gray)
+                        Spacer(Modifier.height(8.dp))
+                        Text("Presiona Play para escanear", color = Color.Gray, fontSize = 16.sp)
                     }
                 }
             } else {
@@ -158,163 +144,96 @@ fun MainScreen(
 }
 
 @Composable
-fun StatsRow(
-    activeCount: Int,
-    totalUnique: Int,
-    avgDwellMs: Long?,
-    totalScans: Int,
-    isScanning: Boolean
-) {
+fun StatsRow(activeCount: Int, totalUnique: Int, avgDwellMs: Long?, totalScans: Int, isScanning: Boolean) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(12.dp),
+        modifier = Modifier.fillMaxWidth().padding(12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        StatCard(
-            label = "Activos",
-            value = "$activeCount",
-            color = if (isScanning) Color(0xFF43A047) else Color.Gray,
-            modifier = Modifier.weight(1f)
-        )
-        StatCard(
-            label = "Unicos",
-            value = "$totalUnique",
-            color = Color(0xFF1E88E5),
-            modifier = Modifier.weight(1f)
-        )
-        StatCard(
-            label = "Perm. Avg",
-            value = formatDuration(avgDwellMs),
-            color = Color(0xFFFB8C00),
-            modifier = Modifier.weight(1f)
-        )
-        StatCard(
-            label = "Lecturas",
-            value = if (totalScans > 1000) "${totalScans / 1000}K" else "$totalScans",
-            color = Color(0xFF8E24AA),
-            modifier = Modifier.weight(1f)
-        )
+        StatCard("Cercanos", "$activeCount", if (isScanning) Color(0xFF43A047) else Color.Gray, Modifier.weight(1f))
+        StatCard("Unicos", "$totalUnique", Color(0xFF1E88E5), Modifier.weight(1f))
+        StatCard("Perm. Avg", formatDuration(avgDwellMs), Color(0xFFFB8C00), Modifier.weight(1f))
+        StatCard("Lecturas", if (totalScans > 1000) "${totalScans / 1000}K" else "$totalScans", Color(0xFF8E24AA), Modifier.weight(1f))
     }
 }
 
 @Composable
 fun StatCard(label: String, value: String, color: Color, modifier: Modifier = Modifier) {
-    Card(
-        modifier = modifier,
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                value,
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold,
-                color = color
-            )
-            Text(
-                label,
-                fontSize = 11.sp,
-                color = Color.Gray
-            )
+    Card(modifier = modifier, colors = CardDefaults.cardColors(containerColor = Color.White), elevation = CardDefaults.cardElevation(2.dp)) {
+        Column(Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(value, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = color)
+            Text(label, fontSize = 11.sp, color = Color.Gray)
         }
     }
 }
 
 @Composable
 fun DeviceCard(device: BleDevice) {
-    val distanceColor = when {
-        estimateCurrentDistance(device) < 1.0 -> Color(0xFF43A047)  // Green = very close
-        estimateCurrentDistance(device) < 3.0 -> Color(0xFFFB8C00)  // Orange = medium
-        else -> Color(0xFFE53935)  // Red = far
+    val brandColor = when (device.brand) {
+        "Apple" -> Color(0xFF333333)
+        "Samsung" -> Color(0xFF1428A0)
+        "Google" -> Color(0xFF4285F4)
+        "Xiaomi" -> Color(0xFFFF6900)
+        "Motorola" -> Color(0xFF5C5C5C)
+        "Huawei" -> Color(0xFFCF0A2C)
+        "Oppo" -> Color(0xFF1A8450)
+        else -> Color(0xFF757575)
     }
 
     val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
         colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+        elevation = CardDefaults.cardElevation(1.dp)
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Signal indicator
+            // Phone icon with brand color
             Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(distanceColor.copy(alpha = 0.15f)),
+                modifier = Modifier.size(40.dp).clip(CircleShape).background(brandColor.copy(alpha = 0.15f)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    Icons.Default.SignalCellularAlt,
-                    contentDescription = null,
-                    tint = distanceColor,
-                    modifier = Modifier.size(20.dp)
-                )
+                Icon(Icons.Default.PhoneAndroid, null, tint = brandColor, modifier = Modifier.size(22.dp))
             }
 
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(Modifier.width(12.dp))
 
             // Device info
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    device.deviceName ?: device.macAddress,
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 14.sp,
-                    maxLines = 1
+                    device.brand ?: "Desconocida",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                    color = brandColor
                 )
                 Text(
                     buildString {
-                        append(device.deviceType ?: "Unknown")
-                        if (device.deviceName != null) {
-                            append(" | ${device.macAddress.takeLast(8)}")
-                        }
+                        if (!device.deviceName.isNullOrEmpty()) append("${device.deviceName} | ")
+                        append(device.macAddress.takeLast(8))
                     },
                     fontSize = 11.sp,
-                    color = Color.Gray
+                    color = Color.Gray,
+                    maxLines = 1
                 )
             }
 
             // Stats
             Column(horizontalAlignment = Alignment.End) {
-                // Permanence
                 if (device.totalDurationMs > 0) {
                     Text(
                         formatDuration(device.totalDurationMs),
-                        fontSize = 12.sp,
+                        fontSize = 13.sp,
                         fontWeight = FontWeight.Medium,
                         color = Color(0xFFFB8C00)
                     )
                 }
-                Text(
-                    "x${device.scanCount}",
-                    fontSize = 11.sp,
-                    color = Color.Gray
-                )
-                Text(
-                    timeFormat.format(Date(device.lastSeenAt)),
-                    fontSize = 10.sp,
-                    color = Color.Gray
-                )
+                Text("x${device.scanCount}", fontSize = 11.sp, color = Color.Gray)
+                Text(timeFormat.format(Date(device.lastSeenAt)), fontSize = 10.sp, color = Color.Gray)
             }
         }
     }
-}
-
-private fun estimateCurrentDistance(device: BleDevice): Double {
-    // Rough estimate: use scan count and recency as proxy
-    val ageMs = System.currentTimeMillis() - device.lastSeenAt
-    return if (ageMs < 5000) 1.0 else if (ageMs < 15000) 3.0 else 10.0
 }
 
 private fun formatDuration(ms: Long?): String {
