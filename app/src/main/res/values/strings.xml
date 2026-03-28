@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">BLE Scanner</string>
+    <string name="scan_notification_title">BLE Scanner activo</string>
+    <string name="scan_notification_text">Escaneando dispositivos cercanos...</string>
+    <string name="channel_name">BLE Scan Service</string>
+    <string name="channel_description">Notificaciones del servicio de escaneo BLE</string>
+</resources>
