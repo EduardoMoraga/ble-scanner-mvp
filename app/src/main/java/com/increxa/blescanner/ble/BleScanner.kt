@@ -30,30 +30,28 @@ class BleScanner(private val context: Context) {
         // Max RSSI readings to keep per device (prevent unbounded memory)
         private const val MAX_RSSI_HISTORY = 200
 
-        // Stationary detection thresholds
-        const val STATIONARY_TIME_MS = 20 * 60 * 1000L  // 20 minutes
-        const val STATIONARY_RSSI_STD_MAX = 4.0          // dBm
+        // Stationary/exhibition detection thresholds
+        // 10 minutes — within BLE MAC rotation window (Android rotates ~15min)
+        const val STATIONARY_TIME_MS = 10 * 60 * 1000L
+        const val STATIONARY_RSSI_STD_MAX = 6.0  // dBm — relaxed from 4.0 for real-world conditions
+        private const val STATIONARY_WINDOW_SIZE = 40  // ~2 minutes of readings at 3s intervals
 
         // Indoor path-loss exponent for distance estimation
         private const val PATH_LOSS_N = 2.5
 
-        // === MANUFACTURER IDs (Bluetooth SIG) ===
+        // === MANUFACTURER IDs (Bluetooth SIG) — PHONE brands only ===
         private val BRAND_BY_MFG_ID = mapOf(
             0x004C to "Apple",
             0x0075 to "Samsung",
             0x00E0 to "Google",
             0x010F to "Xiaomi",
             0x0157 to "Huawei",
-            0x001D to "Qualcomm",
             0x0046 to "Sony",
             0x038F to "Motorola",
-            0x0006 to "Microsoft",
             0x02D5 to "Oppo",
             0x0310 to "Realme",
             0x03DA to "OnePlus",
-            0x000F to "Broadcom",
             0x0301 to "Vivo",
-            0x0171 to "Amazon",
             0x0131 to "TCL",
             0x02E5 to "Transsion",
             0x0386 to "Nothing",
@@ -62,7 +60,7 @@ class BleScanner(private val context: Context) {
         )
 
         // Manufacturer IDs that are definitively NOT phones
-        private val IOT_MFG_IDS = setOf(
+        private val NON_PHONE_MFG_IDS = setOf(
             0x0059, // Nordic Semiconductor (beacons, sensors)
             0x004D, // Logitech (mouse, keyboard)
             0x0822, // Govee
@@ -70,12 +68,15 @@ class BleScanner(private val context: Context) {
             0x0087, // Garmin (watches)
             0x000D, // Texas Instruments (IoT sensors)
             0x0002, // Intel (laptops)
+            0x0006, // Microsoft (Windows PCs, Xbox, Surface)
+            0x0171, // Amazon (Fire tablets, Echo speakers)
+            0x001D, // Qualcomm (reference boards, IoT, not phones)
+            0x000F, // Broadcom (routers, IoT, not phones)
         )
 
         // === BLE Service UUIDs ===
 
         // Google Fast Pair — ACCESSORIES broadcast this, not phones
-        // If a device advertises this, it's earbuds/speaker/watch, not a phone
         private val GOOGLE_FAST_PAIR_UUID = ParcelUuid.fromString("0000FE2C-0000-1000-8000-00805F9B34FB")
 
         // Google Nearby Share / Quick Share — phones DO broadcast this
@@ -87,16 +88,26 @@ class BleScanner(private val context: Context) {
         // Xiaomi MiShare
         private val XIAOMI_UUID = ParcelUuid.fromString("0000FE95-0000-1000-8000-00805F9B34FB")
 
-        // Map UUID → brand (only phone-related UUIDs)
+        // Apple-related service UUIDs (used when manufacturer data is absent)
+        private val APPLE_FINDMY_UUID = ParcelUuid.fromString("0000FD44-0000-1000-8000-00805F9B34FB")
+        private val APPLE_NEARBY_INTERACTION_UUID = ParcelUuid.fromString("0000FE2F-0000-1000-8000-00805F9B34FB")
+        private val APPLE_CONTINUITY_UUID = ParcelUuid.fromString("0000FE26-0000-1000-8000-00805F9B34FB")
+        private val APPLE_HOMEKIT_UUID = ParcelUuid.fromString("0000FED8-0000-1000-8000-00805F9B34FB")
+
+        // Map UUID -> brand (only phone-related UUIDs)
         private val PHONE_SERVICE_UUIDS = mapOf(
             GOOGLE_NEARBY_UUID to "Google/Android",
             SAMSUNG_UUID to "Samsung",
             XIAOMI_UUID to "Xiaomi",
+            APPLE_FINDMY_UUID to "Apple",
+            APPLE_NEARBY_INTERACTION_UUID to "Apple",
+            APPLE_CONTINUITY_UUID to "Apple",
         )
 
         // UUIDs that indicate this is an ACCESSORY, not a phone
         private val ACCESSORY_SERVICE_UUIDS = setOf(
             GOOGLE_FAST_PAIR_UUID,
+            APPLE_HOMEKIT_UUID,  // HomeKit accessories
         )
 
         // === Apple Nearby Info device types (lower nibble of status byte) ===
@@ -114,6 +125,15 @@ class BleScanner(private val context: Context) {
             0x0B to "MacBook",
             0x0C to "MacBook",
             0x0E to "iMac",
+        )
+
+        // Apple device types that are phones (for categorizeAsPhone)
+        private val APPLE_PHONE_TYPES = setOf("iPhone", "iPod Touch")
+
+        // Apple device types that are definitely NOT phones
+        private val APPLE_NON_PHONE_TYPES = setOf(
+            "iPad", "MacBook", "Mac", "iMac",
+            "Apple Watch", "Apple TV", "HomePod", "AirPods"
         )
 
         // Name patterns that indicate NOT a phone
@@ -134,6 +154,14 @@ class BleScanner(private val context: Context) {
             "scale", "toothbrush", "thermometer",
             "tab ", "tab-", "ipad", "tablet", "surface",
             "macbook", "imac", "laptop",
+            "pencil", "magic",  // Apple Pencil, Magic Keyboard/Mouse
+        )
+
+        // Known phone brands for categorizeAsPhone
+        private val KNOWN_PHONE_BRANDS = setOf(
+            "Samsung", "Google", "Xiaomi", "Oppo", "Realme", "OnePlus",
+            "Motorola", "Huawei", "Sony", "Nokia", "Vivo", "TCL", "ZTE",
+            "Nothing", "Transsion", "Lenovo", "Google/Android",
         )
     }
 
@@ -147,12 +175,16 @@ class BleScanner(private val context: Context) {
     )
 
     private var scanner: BluetoothLeScanner? = null
-    private var isScanning = false
+    @Volatile private var isScanning = false
     private val scanBuffer = mutableMapOf<String, ScanData>()
     private val bufferLock = Any()
     private val deviceTrackers = mutableMapOf<String, DeviceTracker>()
     private val trackerLock = Any()
     var onScanError: ((Int) -> Unit)? = null
+
+    // Debug: count rejected devices per reason (reset on flush)
+    private var _debugRejectCounts = mutableMapOf<String, Int>()
+    val debugRejectCounts: Map<String, Int> get() = synchronized(bufferLock) { _debugRejectCounts.toMap() }
 
     private val scanCallback = object : ScanCallback() {
         @SuppressLint("MissingPermission")
@@ -178,34 +210,47 @@ class BleScanner(private val context: Context) {
         val rssi = result.rssi
         val now = System.currentTimeMillis()
 
-        // Reject invalid RSSI readings (valid BLE RSSI is always negative)
-        if (rssi >= 0) return
+        // Reject invalid RSSI readings (valid BLE RSSI range: -120 to -1)
+        if (rssi >= 0 || rssi < -120) {
+            logReject("RSSI_INVALID", macAddress)
+            return
+        }
 
         // --- Step 1: Track this reading regardless of threshold ---
-        val tracker = synchronized(trackerLock) {
-            deviceTrackers.getOrPut(macAddress) {
+        // Hold trackerLock for all tracker operations to prevent races
+        val trackerSnapshot: TrackerSnapshot = synchronized(trackerLock) {
+            val tracker = deviceTrackers.getOrPut(macAddress) {
                 DeviceTracker(firstSeen = now)
-            }.also { t ->
-                t.rssiReadings.add(rssi)
-                t.detectionCount++
-                // Trim to prevent unbounded growth
-                if (t.rssiReadings.size > MAX_RSSI_HISTORY) {
-                    t.rssiReadings.removeAt(0)
-                }
             }
+            tracker.rssiReadings.add(rssi)
+            tracker.detectionCount++
+            // Trim to prevent unbounded growth
+            if (tracker.rssiReadings.size > MAX_RSSI_HISTORY) {
+                tracker.rssiReadings.removeAt(0)
+            }
+
+            // Snapshot all needed values while still holding the lock
+            TrackerSnapshot(
+                firstSeen = tracker.firstSeen,
+                recentRssi = tracker.rssiReadings.takeLast(5),
+                allRssi = tracker.rssiReadings.toList(),
+                detectionCount = tracker.detectionCount,
+                lastBrand = tracker.lastBrand,
+                lastModel = tracker.lastModel
+            )
         }
 
         // --- Step 2: RSSI smoothing — use average of last 5 readings ---
-        val recentReadings = synchronized(trackerLock) {
-            tracker.rssiReadings.takeLast(5)
-        }
-        val avgRssi = recentReadings.average().toInt()
+        val avgRssi = trackerSnapshot.recentRssi.average().toInt()
 
         // Reject if smoothed RSSI below threshold (~1.5m)
-        if (avgRssi < RSSI_THRESHOLD) return
+        if (avgRssi < RSSI_THRESHOLD) {
+            logReject("RSSI_TOO_WEAK", macAddress)
+            return
+        }
 
         // --- Step 3: Minimum detection gate — must be seen 2+ times ---
-        if (tracker.detectionCount < MIN_DETECTIONS) return
+        if (trackerSnapshot.detectionCount < MIN_DETECTIONS) return
 
         // --- Step 4: Brand + Model detection ---
         val deviceName = try { device.name } catch (_: SecurityException) { null }
@@ -215,7 +260,10 @@ class BleScanner(private val context: Context) {
 
         // --- Step 5: Strict phone-only filter ---
         val isPhone = categorizeAsPhone(result, deviceName, brand, model)
-        if (!isPhone) return
+        if (!isPhone) {
+            logReject("NOT_PHONE:$brand", macAddress)
+            return
+        }
 
         // --- Step 6: Compute metrics ---
         val record = result.scanRecord
@@ -223,29 +271,35 @@ class BleScanner(private val context: Context) {
         val effectiveTxPower = if (txPower == Int.MIN_VALUE) DEFAULT_TX_POWER else txPower
         val distance = estimateDistance(avgRssi, effectiveTxPower)
 
-        val allReadings = synchronized(trackerLock) { tracker.rssiReadings.toList() }
-        val rssiStdDev = stdDev(allReadings)
+        // Use sliding window for RSSI stddev (last ~2 min, not all history)
+        val recentWindow = trackerSnapshot.allRssi.takeLast(STATIONARY_WINDOW_SIZE)
+        val rssiStdDev = stdDev(recentWindow)
 
-        val isStationary = allReadings.size >= 10 &&
-                (now - tracker.firstSeen > STATIONARY_TIME_MS) &&
+        // Exhibition: 10 min with stable RSSI in recent window
+        val isStationary = recentWindow.size >= 10 &&
+                (now - trackerSnapshot.firstSeen > STATIONARY_TIME_MS) &&
                 rssiStdDev < STATIONARY_RSSI_STD_MAX
 
         val confidence = calculateConfidence(
-            detectionCount = tracker.detectionCount,
-            brandIdentified = brand != "Desconocida" && !brand.startsWith("MFG:"),
-            modelIdentified = model != null,
-            rssiStdDev = rssiStdDev
+            detectionCount = trackerSnapshot.detectionCount,
+            brand = brand,
+            model = model,
+            rssiStdDev = rssiStdDev,
+            avgRssi = avgRssi
         )
 
         // Update tracker with latest brand/model
         synchronized(trackerLock) {
-            if (brand != "Desconocida") tracker.lastBrand = brand
-            if (model != null) tracker.lastModel = model
+            val tracker = deviceTrackers[macAddress]
+            if (tracker != null) {
+                if (brand != "Desconocida") tracker.lastBrand = brand
+                if (model != null) tracker.lastModel = model
+            }
         }
 
         // Use best known brand/model (might have been identified in earlier reading)
-        val bestBrand = if (brand != "Desconocida") brand else tracker.lastBrand
-        val bestModel = model ?: tracker.lastModel
+        val bestBrand = if (brand != "Desconocida") brand else trackerSnapshot.lastBrand
+        val bestModel = model ?: trackerSnapshot.lastModel
         val displayName = deviceName ?: bestModel
 
         synchronized(bufferLock) {
@@ -261,10 +315,28 @@ class BleScanner(private val context: Context) {
                 estimatedDistanceM = distance,
                 txPower = effectiveTxPower,
                 confidenceScore = confidence,
-                detectionCount = tracker.detectionCount,
+                detectionCount = trackerSnapshot.detectionCount,
                 isStationary = isStationary
             )
         }
+    }
+
+    /** Immutable snapshot of tracker state, safe to use outside the lock. */
+    private data class TrackerSnapshot(
+        val firstSeen: Long,
+        val recentRssi: List<Int>,
+        val allRssi: List<Int>,
+        val detectionCount: Int,
+        val lastBrand: String,
+        val lastModel: String?
+    )
+
+    private fun logReject(reason: String, mac: String) {
+        synchronized(bufferLock) {
+            _debugRejectCounts[reason] = (_debugRejectCounts[reason] ?: 0) + 1
+        }
+        // Log at most once per reason per MAC per minute to avoid spam
+        Log.v(TAG, "REJECT $reason: $mac")
     }
 
     @SuppressLint("MissingPermission")
@@ -297,13 +369,23 @@ class BleScanner(private val context: Context) {
         synchronized(bufferLock) {
             val results = scanBuffer.values.toList()
             scanBuffer.clear()
+
+            // Log debug reject summary
+            if (_debugRejectCounts.isNotEmpty()) {
+                Log.d(TAG, "Reject summary: $_debugRejectCounts")
+                _debugRejectCounts.clear()
+            }
+
             return results
         }
     }
 
     fun resetTrackers() {
         synchronized(trackerLock) { deviceTrackers.clear() }
-        synchronized(bufferLock) { scanBuffer.clear() }
+        synchronized(bufferLock) {
+            scanBuffer.clear()
+            _debugRejectCounts.clear()
+        }
     }
 
     // ===========================
@@ -326,11 +408,11 @@ class BleScanner(private val context: Context) {
     /**
      * Multi-layer brand and model detection.
      *
-     * Layer 1: Apple Continuity TLV — parses Nearby Info for device type (iPhone/iPad/Mac/etc.)
+     * Layer 1: Apple Continuity TLV — parses Nearby Info for device type
      * Layer 2: Other manufacturer IDs (Samsung, Xiaomi, etc.)
-     * Layer 3: BLE service UUIDs (Nearby Share, Samsung Galaxy, etc.)
+     * Layer 3: BLE service UUIDs (Apple Find My, Nearby Share, Samsung Galaxy, etc.)
      * Layer 4: Device name keywords (Galaxy S24, Pixel 9, etc.)
-     * Layer 5: Randomized MAC heuristic — likely Android phone
+     * Layer 5: Randomized MAC heuristic with payload analysis
      */
     private fun detectBrand(result: ScanResult): BrandResult {
         val record = result.scanRecord
@@ -347,12 +429,13 @@ class BleScanner(private val context: Context) {
                 // Apple — parse Continuity TLV protocol
                 if (mfgId == 0x004C && mfgBytes != null) {
                     val appleModel = if (mfgBytes.size >= 2) parseAppleContinuity(mfgBytes) else null
-                    // appleModel can be: "iPhone", "iPad", "AirPods", etc., or null
                     return BrandResult("Apple", appleModel)
                 }
 
-                // Known IoT — reject early
-                if (mfgId in IOT_MFG_IDS) return BrandResult("IoT", null)
+                // Known non-phone manufacturers — reject early
+                if (mfgId in NON_PHONE_MFG_IDS) {
+                    return BrandResult("NonPhone", null)
+                }
 
                 // Samsung — try to extract model from device name
                 if (mfgId == 0x0075) {
@@ -360,7 +443,7 @@ class BleScanner(private val context: Context) {
                     return BrandResult("Samsung", samsungModel)
                 }
 
-                // Other known brands
+                // Other known phone brands
                 val brand = BRAND_BY_MFG_ID[mfgId]
                 if (brand != null) {
                     val model = extractModelFromName(name, brand)
@@ -375,31 +458,44 @@ class BleScanner(private val context: Context) {
         if (record != null) {
             val serviceUuids = record.serviceUuids
 
-            // Check accessory UUIDs first — reject
-            if (serviceUuids != null) {
+            if (serviceUuids != null && serviceUuids.isNotEmpty()) {
+                // Check accessory UUIDs first — reject
                 for (uuid in ACCESSORY_SERVICE_UUIDS) {
                     if (serviceUuids.contains(uuid)) {
                         return BrandResult("Accessory", null)
                     }
                 }
-            }
 
-            // Check phone service UUIDs
-            if (serviceUuids != null) {
+                // Check known phone service UUIDs (includes Apple!)
                 for ((uuid, brand) in PHONE_SERVICE_UUIDS) {
                     if (serviceUuids.contains(uuid)) {
                         val model = extractModelFromName(name, brand)
                         return BrandResult(brand, model)
                     }
                 }
-                if (serviceUuids.isNotEmpty()) {
-                    return BrandResult("Android", extractModelFromName(name, "Android"))
-                }
+
+                // Unknown service UUIDs — do NOT blindly assume Android.
+                // Could be Apple overflow advertisements, IoT devices, etc.
+                // Fall through to Layer 4 and 5 for better classification.
             }
 
+            // Service solicitation UUIDs — Apple uses these for overflow advertisements
             val solicitedUuids = record.serviceSolicitationUuids
             if (solicitedUuids != null && solicitedUuids.isNotEmpty()) {
-                return BrandResult("Android", extractModelFromName(name, "Android"))
+                // Apple overflow advertisements use solicitation UUIDs
+                // These indicate an Apple device that couldn't fit data in the main advertisement
+                // Accept as Apple (80% probability iPhone in public)
+                return BrandResult("Apple", null)
+            }
+
+            // Service data check — Apple Find My uses service data, not manufacturer data
+            val serviceData = record.serviceData
+            if (serviceData != null && serviceData.isNotEmpty()) {
+                for (uuid in serviceData.keys) {
+                    if (uuid != null && PHONE_SERVICE_UUIDS.containsKey(uuid)) {
+                        return BrandResult(PHONE_SERVICE_UUIDS[uuid]!!, null)
+                    }
+                }
             }
         }
 
@@ -409,11 +505,16 @@ class BleScanner(private val context: Context) {
         }
 
         // --- Layer 5: Randomized MAC heuristic ---
+        // Modern phones (both Android and iOS) use randomized MACs.
+        // The second hex char bit 1 (0x02) indicates locally administered (randomized).
+        // Only accept if there is meaningful scan data (payload > 10 bytes).
         val secondChar = mac[1].digitToIntOrNull(16) ?: 0
         val isRandomized = (secondChar and 0x02) != 0
 
         if (isRandomized && record != null && record.bytes != null && record.bytes.size > 10) {
-            return BrandResult("Android", null)
+            // Cannot determine brand — return unknown.
+            // categorizeAsPhone will decide based on randomized MAC.
+            return BrandResult("Desconocida", null)
         }
 
         return BrandResult("Desconocida", null)
@@ -425,11 +526,15 @@ class BleScanner(private val context: Context) {
      * The manufacturer data after company ID 0x004C contains TLV entries:
      * type (1 byte) + length (1 byte) + data (N bytes), repeated.
      *
-     * We look for Nearby Info (type 0x10). Its first data byte encodes:
-     * - Upper nibble (bits 4-7): Activity/status flags
-     * - Lower nibble (bits 0-3): Device type
+     * We look for:
+     * - Nearby Info (0x10): status byte lower nibble = device type
+     * - Proximity Pairing (0x07): AirPods/Beats
+     * - AirDrop (0x05): iPhone/iPad/Mac sending AirDrop
+     * - Find My (0x12): any Apple device with Find My enabled
+     * - Nearby Action (0x0F): usually triggered by phones
      *
-     * Returns model string ("iPhone", "iPad", "Mac") or null.
+     * Returns model string ("iPhone", "iPad", "AirPods") or null if type unknown.
+     * A null return does NOT mean it's not an iPhone — it means we couldn't determine type.
      */
     private fun parseAppleContinuity(mfgBytes: ByteArray): String? {
         var offset = 0
@@ -438,7 +543,7 @@ class BleScanner(private val context: Context) {
         // Strategy 1: Parse TLV structure
         while (offset + 1 < mfgBytes.size) {
             val type = mfgBytes[offset].toInt() and 0xFF
-            val length = if (offset + 1 < mfgBytes.size) mfgBytes[offset + 1].toInt() and 0xFF else break
+            val length = mfgBytes[offset + 1].toInt() and 0xFF
             val dataStart = offset + 2
 
             // Bounds check: if length extends beyond data, stop parsing
@@ -447,15 +552,22 @@ class BleScanner(private val context: Context) {
             when (type) {
                 0x10 -> {
                     // Nearby Info — the most common Apple BLE advertisement
-                    if (length >= 1 && dataStart < mfgBytes.size) {
+                    if (length >= 1) {
                         val statusByte = mfgBytes[dataStart].toInt() and 0xFF
                         val deviceType = statusByte and 0x0F
                         val detected = APPLE_NEARBY_DEVICE_TYPE[deviceType]
                         if (detected != null) return detected
+                        // Unknown device type value — still Apple, just can't classify
                     }
                 }
-                0x07 -> return "AirPods"   // Proximity Pairing
-                0x05 -> foundType = "iPhone" // AirDrop — only phones/tablets/macs
+                0x12 -> {
+                    // Find My — any Apple device with Find My enabled.
+                    // This is extremely common. Cannot distinguish iPhone from iPad/Mac.
+                    // Don't return "AirPods" here — Find My is not Proximity Pairing.
+                    foundType = foundType ?: "Apple Device"
+                }
+                0x07 -> return "AirPods"   // Proximity Pairing (AirPods, Beats)
+                0x05 -> foundType = "iPhone" // AirDrop — usually phone or tablet
                 0x0C -> { /* Handoff — could be iPhone or Mac, don't override */ }
                 0x0F -> foundType = foundType ?: "iPhone" // Nearby Action — usually phone
             }
@@ -480,8 +592,8 @@ class BleScanner(private val context: Context) {
             }
         }
 
-        // Could not determine — will return null
-        // categorizeAsPhone will still accept Apple with null model
+        // Could not determine device type — return null.
+        // categorizeAsPhone will still accept Apple with null model (80% iPhone assumption).
         return null
     }
 
@@ -491,6 +603,7 @@ class BleScanner(private val context: Context) {
     private fun detectBrandFromName(name: String): BrandResult {
         return when {
             name.contains("iphone") -> BrandResult("Apple", "iPhone")
+            name.contains("ipad") -> BrandResult("Apple", "iPad")
             name.contains("galaxy") && !name.contains("watch") && !name.contains("buds") && !name.contains("tab") ->
                 BrandResult("Samsung", extractSamsungModel(name))
             name.contains("samsung") && !name.contains("tv") && !name.contains("tab") ->
@@ -515,7 +628,7 @@ class BleScanner(private val context: Context) {
                 BrandResult("Transsion", extractModelFromName(name, "Transsion"))
             name.contains("sony") || name.contains("xperia") ->
                 BrandResult("Sony", extractModelFromName(name, "Sony"))
-            else -> BrandResult("Android", name.trim())
+            else -> BrandResult("Desconocida", name.trim())
         }
     }
 
@@ -541,35 +654,33 @@ class BleScanner(private val context: Context) {
     // ===========================
 
     /**
-     * Strict phone-only filter. Returns true ONLY for confirmed phones.
+     * Strict phone-only filter. Returns true ONLY for confirmed/probable phones.
      *
-     * Conservative approach: if we can't confirm it's a phone, reject it.
-     * Better to miss a real phone than to count a tablet, laptop, or accessory.
+     * Strategy:
+     * - Known non-phone brands/patterns: hard reject.
+     * - Apple: accept if model is phone/unknown, reject if model is known non-phone.
+     * - Known Android brands: accept.
+     * - Randomized MAC with substantial payload: accept (high probability phone).
+     * - Everything else: reject.
      */
     private fun categorizeAsPhone(result: ScanResult, name: String?, brand: String, model: String?): Boolean {
         val lowerName = name?.lowercase() ?: ""
 
-        // --- Hard rejects: known NON-phone brands and categories ---
-        val nonPhoneBrands = setOf(
-            "IoT", "Accessory", "Logitech", "Garmin", "Nike", "Nordic",
-            "Microsoft",  // Windows PCs, Xbox, Surface
-            "Intel",      // Laptops, IoT
-            "Amazon",     // Fire tablets, Echo speakers
-        )
-        if (brand in nonPhoneBrands) return false
+        // --- Hard rejects: known NON-phone brands ---
+        if (brand == "NonPhone" || brand == "Accessory" || brand == "IoT") return false
 
         // Reject by name patterns (TVs, speakers, tablets, laptops, watches, etc.)
         for (pattern in NON_PHONE_NAME_PATTERNS) {
             if (lowerName.contains(pattern)) return false
         }
 
-        // Reject known IoT manufacturer IDs
+        // Reject known non-phone manufacturer IDs (double-check in case detectBrand missed)
         val record = result.scanRecord
         if (record != null) {
             val mfgData = record.manufacturerSpecificData
             if (mfgData != null && mfgData.size() > 0) {
                 val mfgId = mfgData.keyAt(0)
-                if (mfgId in IOT_MFG_IDS) return false
+                if (mfgId in NON_PHONE_MFG_IDS) return false
             }
         }
 
@@ -577,39 +688,33 @@ class BleScanner(private val context: Context) {
         if (brand.startsWith("MFG:")) return false
 
         // --- Apple handling ---
-        // If TLV parsing identified the device type, use it strictly.
-        // If TLV could NOT identify the type (model == null), ACCEPT it.
-        // Reason: ~80% of Apple BLE devices in public are iPhones.
-        // iPads/Macs that slip through are filtered by the 1.5m RSSI threshold.
-        // Known non-phones (Watch, AirPods, Mac, iPad) are rejected when identified.
+        // Apple devices detected via manufacturer ID 0x004C or Apple service UUIDs.
+        // If TLV identified a specific device type, use it.
+        // If type is unknown (null or "Apple Device"), ACCEPT — ~80% are iPhones in public.
+        // The 1.5m RSSI threshold already filters most iPads/Macs (used at desk distance).
         if (brand == "Apple") {
-            val knownNonPhones = setOf("iPad", "MacBook", "Mac", "iMac",
-                "Apple Watch", "Apple TV", "HomePod", "AirPods")
-            if (model in knownNonPhones) return false
-            // model == "iPhone", "iPod Touch", or null (unidentified) → accept
+            if (model != null && model in APPLE_NON_PHONE_TYPES) return false
+            // model is "iPhone", "iPod Touch", "Apple Device", null, or other → accept
             return true
         }
 
         // --- Known phone brands ---
-        if (brand in listOf(
-                "Samsung", "Google", "Xiaomi", "Oppo", "Realme", "OnePlus",
-                "Motorola", "Huawei", "Sony", "Nokia", "Vivo", "TCL", "ZTE",
-                "Nothing", "Transsion", "Lenovo", "Google/Android",
-                "Qualcomm", "Broadcom"  // chip makers used in Android phones
-            )) {
-            return true
-        }
+        if (brand in KNOWN_PHONE_BRANDS) return true
 
-        // --- Generic Android ---
+        // --- Generic Android (from name-based detection) ---
         if (brand == "Android") return true
 
-        // --- Randomized MAC: only if brand is unknown ("Desconocida") ---
-        // Don't let randomized MAC override a known non-phone brand
+        // --- Randomized MAC heuristic (brand == "Desconocida") ---
+        // Modern phones use randomized MACs. If the MAC is randomized and the device has
+        // a meaningful BLE payload, it's very likely a phone.
+        // This catches phones that don't advertise manufacturer data or known service UUIDs.
         if (brand == "Desconocida") {
             val mac = result.device.address
             val secondChar = mac[1].digitToIntOrNull(16) ?: 0
             val isRandomized = (secondChar and 0x02) != 0
-            if (isRandomized) return true
+            if (isRandomized && record != null && record.bytes != null && record.bytes.size > 10) {
+                return true
+            }
         }
 
         // Default: reject
@@ -623,28 +728,45 @@ class BleScanner(private val context: Context) {
     /**
      * Calculate a confidence score (0-100) for each detected phone.
      *
-     * Based on:
-     * - Detection count (consistency of presence)
-     * - Brand identification (known vs unknown)
-     * - Model identification (specific model detected)
-     * - RSSI stability (lower variance = more reliable reading)
+     * Redesigned to produce meaningful distribution:
+     * - Detection frequency is the strongest signal (up to 50 pts)
+     *   -- More detections = more certain this is a real, present phone
+     * - RSSI strength provides proximity confidence (up to 20 pts)
+     *   -- Stronger signal = closer = more reliable detection
+     * - RSSI stability reflects consistent presence (up to 20 pts)
+     *   -- Low variance = device is stationary, not just passing by
+     * - Brand identification adds certainty (up to 10 pts)
+     *   -- Known brand > unknown; specific model is a bonus
      */
     private fun calculateConfidence(
         detectionCount: Int,
-        brandIdentified: Boolean,
-        modelIdentified: Boolean,
-        rssiStdDev: Double
+        brand: String,
+        model: String?,
+        rssiStdDev: Double,
+        avgRssi: Int
     ): Int {
         var score = 0
 
-        // Detection count: up to 40 points (1 det = 10, capped at 4+)
-        score += (detectionCount * 10).coerceAtMost(40)
+        // Detection frequency: up to 50 points
+        // Gradual ramp: 2 det = 10, 5 = 25, 10 = 40, 15+ = 50
+        score += when {
+            detectionCount >= 15 -> 50
+            detectionCount >= 10 -> 40
+            detectionCount >= 7 -> 35
+            detectionCount >= 5 -> 25
+            detectionCount >= 3 -> 15
+            else -> 10
+        }
 
-        // Brand identification: 20 points
-        if (brandIdentified) score += 20
-
-        // Model identification: 20 points
-        if (modelIdentified) score += 20
+        // RSSI strength: up to 20 points
+        // Stronger signal = closer = more confident it's a real detection
+        score += when {
+            avgRssi >= -45 -> 20  // very close, < 0.3m
+            avgRssi >= -50 -> 17  // close, < 0.5m
+            avgRssi >= -55 -> 13  // nearby, ~ 1m
+            avgRssi >= -59 -> 8   // in range, ~ 1.2m
+            else -> 3             // edge of range, ~ 1.5m
+        }
 
         // RSSI stability: up to 20 points
         score += when {
@@ -654,6 +776,11 @@ class BleScanner(private val context: Context) {
             rssiStdDev < 10.0 -> 5
             else -> 0
         }
+
+        // Brand/model identification: up to 10 points
+        val brandKnown = brand != "Desconocida" && !brand.startsWith("MFG:")
+        if (brandKnown) score += 5
+        if (model != null && model != "Apple Device") score += 5
 
         return score.coerceIn(0, 100)
     }

@@ -71,22 +71,23 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
             val devices = repository.getDevicesForExport()
             val session = repository.getLatestSession()
 
+            val sep = ";"  // Semicolon separator — safe for LATAM locales and field values
             val csv = buildString {
                 // Professional CSV header
-                appendLine("dispositivo_id,marca,modelo,nombre_dispositivo,primera_deteccion,ultima_deteccion,permanencia_segundos,veces_detectado,rssi_promedio,confianza_pct,es_exhibicion,sesion_latitud,sesion_longitud")
+                appendLine("dispositivo_id${sep}marca${sep}modelo${sep}nombre_dispositivo${sep}primera_deteccion${sep}ultima_deteccion${sep}permanencia_segundos${sep}veces_detectado${sep}rssi_promedio${sep}confianza_pct${sep}es_exhibicion${sep}sesion_latitud${sep}sesion_longitud")
 
                 devices.forEach { d ->
                     val firstSeen = dateFormat.format(Date(d.firstSeenAt))
                     val lastSeen = dateFormat.format(Date(d.lastSeenAt))
                     val dwellSeconds = d.totalDurationMs / 1000
-                    val safeName = (d.deviceName ?: "").replace(",", " ").replace("\"", "")
-                    val brand = (d.brand ?: "Desconocida").replace(",", " ")
-                    val model = (d.model ?: "").replace(",", " ")
+                    val safeName = (d.deviceName ?: "").replace(";", " ").replace("\"", "")
+                    val brand = (d.brand ?: "Desconocida").replace(";", " ")
+                    val model = (d.model ?: "").replace(";", " ")
                     val lat = session?.locationLat?.let { String.format(Locale.US, "%.6f", it) } ?: ""
                     val lng = session?.locationLng?.let { String.format(Locale.US, "%.6f", it) } ?: ""
                     val exhib = if (d.isStationary) "SI" else "NO"
 
-                    appendLine("${d.macAddress},$brand,$model,$safeName,$firstSeen,$lastSeen,$dwellSeconds,${d.scanCount},${d.avgRssi},${d.confidenceScore},$exhib,$lat,$lng")
+                    appendLine("${d.macAddress}${sep}$brand${sep}$model${sep}$safeName${sep}$firstSeen${sep}$lastSeen${sep}$dwellSeconds${sep}${d.scanCount}${sep}${d.avgRssi}${sep}${d.confidenceScore}${sep}$exhib${sep}$lat${sep}$lng")
                 }
             }
             onResult(csv)
