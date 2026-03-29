@@ -178,6 +178,9 @@ class BleScanner(private val context: Context) {
         val rssi = result.rssi
         val now = System.currentTimeMillis()
 
+        // Reject invalid RSSI readings (valid BLE RSSI is always negative)
+        if (rssi >= 0) return
+
         // --- Step 1: Track this reading regardless of threshold ---
         val tracker = synchronized(trackerLock) {
             deviceTrackers.getOrPut(macAddress) {
@@ -342,9 +345,10 @@ class BleScanner(private val context: Context) {
                 val mfgBytes = mfgData.valueAt(0)
 
                 // Apple — parse Continuity TLV protocol
-                if (mfgId == 0x004C && mfgBytes != null && mfgBytes.size >= 3) {
-                    val appleInfo = parseAppleContinuity(mfgBytes)
-                    return BrandResult("Apple", appleInfo)
+                if (mfgId == 0x004C && mfgBytes != null) {
+                    val appleModel = if (mfgBytes.size >= 2) parseAppleContinuity(mfgBytes) else null
+                    // appleModel can be: "iPhone", "iPad", "AirPods", etc., or null
+                    return BrandResult("Apple", appleModel)
                 }
 
                 // Known IoT — reject early
@@ -429,32 +433,55 @@ class BleScanner(private val context: Context) {
      */
     private fun parseAppleContinuity(mfgBytes: ByteArray): String? {
         var offset = 0
+        var foundType: String? = null
 
-        while (offset + 2 < mfgBytes.size) {
+        // Strategy 1: Parse TLV structure
+        while (offset + 1 < mfgBytes.size) {
             val type = mfgBytes[offset].toInt() and 0xFF
-            val length = mfgBytes[offset + 1].toInt() and 0xFF
+            val length = if (offset + 1 < mfgBytes.size) mfgBytes[offset + 1].toInt() and 0xFF else break
             val dataStart = offset + 2
+
+            // Bounds check: if length extends beyond data, stop parsing
+            if (dataStart + length > mfgBytes.size) break
 
             when (type) {
                 0x10 -> {
                     // Nearby Info — the most common Apple BLE advertisement
                     if (length >= 1 && dataStart < mfgBytes.size) {
                         val statusByte = mfgBytes[dataStart].toInt() and 0xFF
-                        val deviceType = statusByte and 0x0F  // lower nibble
-                        return APPLE_NEARBY_DEVICE_TYPE[deviceType]
+                        val deviceType = statusByte and 0x0F
+                        val detected = APPLE_NEARBY_DEVICE_TYPE[deviceType]
+                        if (detected != null) return detected
                     }
                 }
-                0x07 -> {
-                    // Proximity Pairing — AirPods, Beats, etc.
-                    return "AirPods"
-                }
+                0x07 -> return "AirPods"   // Proximity Pairing
+                0x05 -> foundType = "iPhone" // AirDrop — only phones/tablets/macs
+                0x0C -> { /* Handoff — could be iPhone or Mac, don't override */ }
+                0x0F -> foundType = foundType ?: "iPhone" // Nearby Action — usually phone
             }
 
             offset = dataStart + length
-            if (length == 0) offset++ // safety: prevent infinite loop
+            if (length == 0) offset++ // prevent infinite loop on malformed data
         }
 
-        // Could not determine device type from Continuity data
+        if (foundType != null) return foundType
+
+        // Strategy 2: Fallback — scan raw bytes for Nearby Info pattern (0x10)
+        // Some Apple devices might not have clean TLV but still contain 0x10 somewhere
+        for (i in 0 until mfgBytes.size - 2) {
+            if ((mfgBytes[i].toInt() and 0xFF) == 0x10) {
+                val possibleLength = mfgBytes[i + 1].toInt() and 0xFF
+                if (possibleLength in 1..20 && i + 2 < mfgBytes.size) {
+                    val statusByte = mfgBytes[i + 2].toInt() and 0xFF
+                    val deviceType = statusByte and 0x0F
+                    val detected = APPLE_NEARBY_DEVICE_TYPE[deviceType]
+                    if (detected != null) return detected
+                }
+            }
+        }
+
+        // Could not determine — will return null
+        // categorizeAsPhone will still accept Apple with null model
         return null
     }
 
@@ -522,10 +549,14 @@ class BleScanner(private val context: Context) {
     private fun categorizeAsPhone(result: ScanResult, name: String?, brand: String, model: String?): Boolean {
         val lowerName = name?.lowercase() ?: ""
 
-        // --- Hard rejects ---
-
-        // Reject known non-phone brands
-        if (brand in listOf("IoT", "Accessory", "Logitech", "Garmin", "Nike", "Nordic")) return false
+        // --- Hard rejects: known NON-phone brands and categories ---
+        val nonPhoneBrands = setOf(
+            "IoT", "Accessory", "Logitech", "Garmin", "Nike", "Nordic",
+            "Microsoft",  // Windows PCs, Xbox, Surface
+            "Intel",      // Laptops, IoT
+            "Amazon",     // Fire tablets, Echo speakers
+        )
+        if (brand in nonPhoneBrands) return false
 
         // Reject by name patterns (TVs, speakers, tablets, laptops, watches, etc.)
         for (pattern in NON_PHONE_NAME_PATTERNS) {
@@ -542,33 +573,46 @@ class BleScanner(private val context: Context) {
             }
         }
 
-        // --- Apple: ONLY iPhone (and iPod Touch) passes ---
+        // Reject unknown manufacturer prefixes (MFG:XXXX = unrecognized chip)
+        if (brand.startsWith("MFG:")) return false
+
+        // --- Apple handling ---
+        // If TLV parsing identified the device type, use it strictly.
+        // If TLV could NOT identify the type (model == null), ACCEPT it.
+        // Reason: ~80% of Apple BLE devices in public are iPhones.
+        // iPads/Macs that slip through are filtered by the 1.5m RSSI threshold.
+        // Known non-phones (Watch, AirPods, Mac, iPad) are rejected when identified.
         if (brand == "Apple") {
-            return model == "iPhone" || model == "iPod Touch"
+            val knownNonPhones = setOf("iPad", "MacBook", "Mac", "iMac",
+                "Apple Watch", "Apple TV", "HomePod", "AirPods")
+            if (model in knownNonPhones) return false
+            // model == "iPhone", "iPod Touch", or null (unidentified) → accept
+            return true
         }
 
-        // --- Known phone brands with no disqualifying name ---
+        // --- Known phone brands ---
         if (brand in listOf(
                 "Samsung", "Google", "Xiaomi", "Oppo", "Realme", "OnePlus",
                 "Motorola", "Huawei", "Sony", "Nokia", "Vivo", "TCL", "ZTE",
-                "Nothing", "Transsion", "Lenovo", "Google/Android"
+                "Nothing", "Transsion", "Lenovo", "Google/Android",
+                "Qualcomm", "Broadcom"  // chip makers used in Android phones
             )) {
             return true
         }
 
-        // --- Android (generic) or unknown manufacturer ---
+        // --- Generic Android ---
         if (brand == "Android") return true
 
-        // --- Randomized MAC with advertisement data = likely modern phone ---
-        val mac = result.device.address
-        val secondChar = mac[1].digitToIntOrNull(16) ?: 0
-        val isRandomized = (secondChar and 0x02) != 0
-        if (isRandomized) return true
+        // --- Randomized MAC: only if brand is unknown ("Desconocida") ---
+        // Don't let randomized MAC override a known non-phone brand
+        if (brand == "Desconocida") {
+            val mac = result.device.address
+            val secondChar = mac[1].digitToIntOrNull(16) ?: 0
+            val isRandomized = (secondChar and 0x02) != 0
+            if (isRandomized) return true
+        }
 
-        // --- Unknown manufacturer with prefix "MFG:" — uncertain, reject ---
-        if (brand.startsWith("MFG:")) return false
-
-        // Default: reject (conservative)
+        // Default: reject
         return false
     }
 
