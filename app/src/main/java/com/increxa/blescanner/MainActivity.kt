@@ -30,6 +30,7 @@ class MainActivity : ComponentActivity() {
     private val viewModel: BleViewModel by viewModels()
     private var scanService: BleScanService? = null
     private var serviceBound = false
+    private var pendingPdvName: String = ""
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -76,7 +77,7 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 MainScreen(
                     viewModel = viewModel,
-                    onStartScan = { requestPermissionsAndScan() },
+                    onStartScan = { pdvName -> requestPermissionsAndScan(pdvName) },
                     onStopScan = { stopScan() },
                     onExport = { exportData() }
                 )
@@ -99,7 +100,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun requestPermissionsAndScan() {
+    private fun requestPermissionsAndScan(pdvName: String) {
+        pendingPdvName = pdvName
         val missing = requiredPermissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
@@ -137,11 +139,12 @@ class MainActivity : ComponentActivity() {
             }
         } catch (_: Exception) {}
 
-        viewModel.onScanStarted(sessionId)
+        viewModel.onScanStarted(sessionId, pendingPdvName)
 
         val intent = Intent(this, BleScanService::class.java).apply {
             action = BleScanService.ACTION_START
             putExtra("session_id", sessionId)
+            putExtra("pdv_name", pendingPdvName)
             putExtra("lat", lat ?: Double.NaN)
             putExtra("lng", lng ?: Double.NaN)
         }
@@ -149,7 +152,7 @@ class MainActivity : ComponentActivity() {
 
         bindService(Intent(this, BleScanService::class.java), serviceConnection, Context.BIND_AUTO_CREATE)
 
-        Toast.makeText(this, "Escaneando celulares cercanos (1.5m)", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Spectra analizando trafico en ${pendingPdvName.ifBlank { "PDV" }}", Toast.LENGTH_SHORT).show()
     }
 
     private fun stopScan() {
@@ -160,7 +163,8 @@ class MainActivity : ComponentActivity() {
 
     private fun exportData() {
         viewModel.getExportData { csvContent ->
-            if (csvContent.lines().size <= 1) {
+            // CSV now has # header lines + column header; check for actual data rows
+            if (csvContent.lines().count { it.isNotBlank() && !it.startsWith("#") } <= 1) {
                 runOnUiThread {
                     Toast.makeText(this, "No hay datos para exportar", Toast.LENGTH_SHORT).show()
                 }

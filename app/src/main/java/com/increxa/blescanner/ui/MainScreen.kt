@@ -21,10 +21,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BluetoothSearching
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Storefront
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -32,21 +34,30 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.increxa.blescanner.data.BleDevice
+import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -75,11 +86,18 @@ private val proximityClose = Color(0xFF1E88E5)     // 0.5-1.0m blue
 private val proximityInRange = Color(0xFFFB8C00)   // 1.0-1.5m orange
 private val exhibitionRed = Color(0xFFE53935)
 
+// === THEME COLORS ===
+private val darkBlue = Color(0xFF0D47A1)
+private val tealAccent = Color(0xFF00897B)
+private val greenFab = Color(0xFF43A047)
+private val redFab = Color(0xFFE53935)
+private val sessionGreenBg = Color(0xFFE8F5E9)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
     viewModel: BleViewModel,
-    onStartScan: () -> Unit,
+    onStartScan: (String) -> Unit,
     onStopScan: () -> Unit,
     onExport: () -> Unit
 ) {
@@ -89,27 +107,52 @@ fun MainScreen(
     val avgDwell by viewModel.avgDwellTimeMs.collectAsState()
     val avgConfidence by viewModel.avgConfidence.collectAsState()
     val estimatedPeople by viewModel.estimatedPeople.collectAsState()
+    val appleDeviceCount by viewModel.appleDeviceCount.collectAsState()
+    val exhibitionCount by viewModel.exhibitionCount.collectAsState()
+    val currentPdvName by viewModel.currentPdvName.collectAsState()
+    val sessionStartTime by viewModel.sessionStartTime.collectAsState()
+
+    var showStartDialog by remember { mutableStateOf(false) }
+    var pdvNameInput by remember { mutableStateOf("") }
 
     val fabColor by animateColorAsState(
-        if (isScanning) Color(0xFFE53935) else Color(0xFF1E88E5),
+        if (isScanning) redFab else greenFab,
         label = "fabColor"
     )
+
+    // Start scan dialog
+    if (showStartDialog) {
+        StartScanDialog(
+            pdvNameInput = pdvNameInput,
+            onPdvNameChange = { pdvNameInput = it },
+            onConfirm = {
+                val name = pdvNameInput.ifBlank { "Sin nombre" }
+                showStartDialog = false
+                pdvNameInput = ""
+                onStartScan(name)
+            },
+            onDismiss = {
+                showStartDialog = false
+                pdvNameInput = ""
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Column {
-                        Text("BLE Scanner Pro", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                        Text("Spectra", fontWeight = FontWeight.Bold, fontSize = 20.sp)
                         Text(
-                            "Solo celulares | Radio 1.5m | Conf. + Exhib.",
+                            "Analisis de Trafico en PDV",
                             fontSize = 10.sp,
                             color = Color.White.copy(alpha = 0.7f)
                         )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF0D47A1),
+                    containerColor = darkBlue,
                     titleContentColor = Color.White
                 ),
                 actions = {
@@ -121,11 +164,17 @@ fun MainScreen(
         },
         floatingActionButton = {
             FloatingActionButton(
-                onClick = { if (isScanning) onStopScan() else onStartScan() },
+                onClick = {
+                    if (isScanning) {
+                        onStopScan()
+                    } else {
+                        showStartDialog = true
+                    }
+                },
                 containerColor = fabColor
             ) {
                 Icon(
-                    if (isScanning) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    if (isScanning) Icons.Default.Stop else Icons.Default.PlayArrow,
                     contentDescription = if (isScanning) "Detener" else "Iniciar",
                     tint = Color.White
                 )
@@ -138,33 +187,68 @@ fun MainScreen(
                 .padding(padding)
                 .background(Color(0xFFF5F5F5))
         ) {
-            StatsRow(
-                activeCount = activeDevices.size,
-                totalUnique = totalUnique,
-                avgDwellMs = avgDwell,
-                avgConfidence = avgConfidence,
+            // Session info bar (only when scanning)
+            if (isScanning) {
+                SessionInfoBar(
+                    pdvName = currentPdvName,
+                    sessionStartTime = sessionStartTime
+                )
+            }
+
+            // Hero section — estimated people
+            HeroSection(
                 estimatedPeople = estimatedPeople,
+                appleCount = appleDeviceCount - exhibitionCount,
                 isScanning = isScanning
             )
 
-            Text(
-                "Celulares detectados (1.5m)",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+            // Stats row — 3 cards
+            StatsRow(
+                totalUnique = totalUnique,
+                avgDwellMs = avgDwell,
+                avgConfidence = avgConfidence
             )
 
+            // Device list section
             if (activeDevices.isEmpty() && !isScanning) {
+                // Empty state
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Default.BluetoothSearching, null, Modifier.size(64.dp), tint = Color.Gray)
-                        Spacer(Modifier.height(8.dp))
-                        Text("Presiona Play para escanear", color = Color.Gray, fontSize = 16.sp)
+                        Icon(
+                            Icons.Default.BluetoothSearching,
+                            null,
+                            Modifier.size(64.dp),
+                            tint = Color.Gray
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            "Spectra",
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = darkBlue
+                        )
                         Spacer(Modifier.height(4.dp))
-                        Text("Radio: 1.5m | Solo celulares", color = Color.LightGray, fontSize = 12.sp)
+                        Text(
+                            "Presiona \u25B6 para analizar trafico",
+                            fontSize = 14.sp,
+                            color = Color.Gray
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Radio: 1.5m | Solo celulares",
+                            fontSize = 11.sp,
+                            color = Color.LightGray
+                        )
                     }
                 }
             } else {
+                Text(
+                    "\uD83D\uDCF1 Dispositivos cercanos (${activeDevices.size})",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -179,18 +263,141 @@ fun MainScreen(
 }
 
 @Composable
-fun StatsRow(activeCount: Int, totalUnique: Int, avgDwellMs: Long?, avgConfidence: Int?, estimatedPeople: Int, isScanning: Boolean) {
+fun StartScanDialog(
+    pdvNameInput: String,
+    onPdvNameChange: (String) -> Unit,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Nuevo Escaneo", fontWeight = FontWeight.Bold) },
+        text = {
+            OutlinedTextField(
+                value = pdvNameInput,
+                onValueChange = onPdvNameChange,
+                label = { Text("Nombre del PDV") },
+                placeholder = { Text("ej. Falabella Mall Plaza") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text("Iniciar", color = darkBlue, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancelar")
+            }
+        }
+    )
+}
+
+@Composable
+fun SessionInfoBar(pdvName: String, sessionStartTime: Long) {
+    var elapsedSeconds by remember { mutableLongStateOf(0L) }
+
+    // Update elapsed time every second
+    LaunchedEffect(sessionStartTime) {
+        while (true) {
+            elapsedSeconds = (System.currentTimeMillis() - sessionStartTime) / 1000
+            delay(1000)
+        }
+    }
+
+    val hours = elapsedSeconds / 3600
+    val minutes = (elapsedSeconds % 3600) / 60
+    val seconds = elapsedSeconds % 60
+    val timeStr = String.format(Locale.US, "%d:%02d:%02d", hours, minutes, seconds)
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(12.dp),
+            .background(sessionGreenBg)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Default.LocationOn,
+                contentDescription = null,
+                tint = Color(0xFF2E7D32),
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                pdvName.ifBlank { "Sin nombre" },
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp,
+                color = Color(0xFF1B5E20)
+            )
+        }
+        Text(
+            timeStr,
+            fontWeight = FontWeight.Medium,
+            fontSize = 14.sp,
+            color = Color(0xFF2E7D32)
+        )
+    }
+}
+
+@Composable
+fun HeroSection(estimatedPeople: Int, appleCount: Int, isScanning: Boolean) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        val displayText = when {
+            estimatedPeople > 0 -> "$estimatedPeople"
+            isScanning -> "Analizando..."
+            else -> "--"
+        }
+
+        Text(
+            text = displayText,
+            fontSize = if (displayText.length <= 5) 56.sp else 36.sp,
+            fontWeight = FontWeight.Bold,
+            color = tealAccent,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(Modifier.height(4.dp))
+
+        Text(
+            "Personas estimadas",
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Medium,
+            color = Color(0xFF424242)
+        )
+
+        Spacer(Modifier.height(4.dp))
+
+        Text(
+            if (appleCount > 0) "$appleCount Apple detectados \u00D7 correccion Chile"
+            else "Estimacion basada en deteccion Apple + factor mercado",
+            fontSize = 11.sp,
+            color = Color.Gray,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+fun StatsRow(totalUnique: Int, avgDwellMs: Long?, avgConfidence: Int?) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        StatCard("Cercanos", "$activeCount", if (isScanning) Color(0xFF43A047) else Color.Gray, Modifier.weight(1f))
-        StatCard("Unicos", "$totalUnique", Color(0xFF1E88E5), Modifier.weight(1f))
-        StatCard("Perm.", formatDuration(avgDwellMs), Color(0xFFFB8C00), Modifier.weight(1f))
-        StatCard("Conf.", "${avgConfidence ?: 0}%", Color(0xFF7B1FA2), Modifier.weight(1f))
-        StatCard("Personas est.", if (estimatedPeople > 0) "$estimatedPeople" else "--", Color(0xFF00897B), Modifier.weight(1f))
+        StatCard("Dispositivos", "$totalUnique", Color(0xFF1E88E5), Modifier.weight(1f))
+        StatCard("Permanencia", formatDuration(avgDwellMs), Color(0xFFFB8C00), Modifier.weight(1f))
+        StatCard("Confianza", "${avgConfidence ?: 0}%", Color(0xFF7B1FA2), Modifier.weight(1f))
     }
 }
 
@@ -221,9 +428,9 @@ fun DeviceCard(device: BleDevice) {
     }
 
     val proximityLabel = when {
-        device.avgRssi >= -50 -> "< 0.5m"
-        device.avgRssi >= -56 -> "~ 1m"
-        else -> "~ 1.5m"
+        device.avgRssi >= -50 -> "~0.5m"
+        device.avgRssi >= -56 -> "~1m"
+        else -> "~1.5m"
     }
 
     Card(
@@ -249,12 +456,15 @@ fun DeviceCard(device: BleDevice) {
 
             Spacer(Modifier.width(8.dp))
 
-            // Phone icon with brand color
+            // Phone/storefront icon with brand color
             Box(
                 modifier = Modifier
                     .size(40.dp)
                     .clip(CircleShape)
-                    .background(brandColor.copy(alpha = 0.12f)),
+                    .background(
+                        if (device.isStationary) exhibitionRed.copy(alpha = 0.12f)
+                        else brandColor.copy(alpha = 0.12f)
+                    ),
                 contentAlignment = Alignment.Center
             ) {
                 if (device.isStationary) {
@@ -266,9 +476,9 @@ fun DeviceCard(device: BleDevice) {
 
             Spacer(Modifier.width(10.dp))
 
-            // Device info
+            // Device info — NO MAC address
             Column(modifier = Modifier.weight(1f)) {
-                // Brand + Model
+                // Line 1: Brand + Model + EXHIB badge
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         buildString {
@@ -298,17 +508,15 @@ fun DeviceCard(device: BleDevice) {
                     }
                 }
 
-                // Second line: MAC + proximity + confidence
+                // Line 2: Proximity + confidence — NO MAC
                 Text(
                     buildString {
-                        append(device.macAddress.takeLast(8))
-                        append(" | ")
                         append(proximityLabel)
                         if (device.confidenceScore > 0) {
                             append(" | ${device.confidenceScore}%")
                         }
                     },
-                    fontSize = 10.sp,
+                    fontSize = 11.sp,
                     color = Color.Gray,
                     maxLines = 1
                 )

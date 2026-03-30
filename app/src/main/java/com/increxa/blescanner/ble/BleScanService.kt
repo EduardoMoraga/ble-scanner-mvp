@@ -65,10 +65,12 @@ class BleScanService : Service() {
                 val sessionId = intent.getStringExtra("session_id") ?: "session_${System.currentTimeMillis()}"
                 val lat = intent.getDoubleExtra("lat", Double.NaN)
                 val lng = intent.getDoubleExtra("lng", Double.NaN)
+                val pdvName = intent.getStringExtra("pdv_name")
                 startScanning(
                     sessionId,
                     if (lat.isNaN()) null else lat,
-                    if (lng.isNaN()) null else lng
+                    if (lng.isNaN()) null else lng,
+                    pdvName
                 )
             }
             ACTION_STOP -> stopScanning()
@@ -76,7 +78,7 @@ class BleScanService : Service() {
         return START_STICKY
     }
 
-    fun startScanning(sessionId: String? = null, lat: Double? = null, lng: Double? = null) {
+    fun startScanning(sessionId: String? = null, lat: Double? = null, lng: Double? = null, pdvName: String? = null) {
         currentSessionId = sessionId ?: "session_${System.currentTimeMillis()}"
 
         startForeground(NOTIFICATION_ID, createNotification())
@@ -85,10 +87,10 @@ class BleScanService : Service() {
         _isScanning.value = started
 
         if (started) {
-            Log.i(TAG, "Scanning started, session: $currentSessionId")
+            Log.i(TAG, "Scanning started, session: $currentSessionId, PDV: $pdvName")
             serviceScope.launch {
                 val app = application as BleApplication
-                app.repository.startSession(currentSessionId!!, lat, lng)
+                app.repository.startSession(currentSessionId!!, lat, lng, pdvName)
             }
             startBatchProcessor()
         } else {
@@ -158,7 +160,7 @@ class BleScanService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val text = if (deviceCount > 0) "$deviceCount celulares detectados (1.5m)"
+        val text = if (deviceCount > 0) "Spectra | $deviceCount celulares detectados"
         else getString(R.string.scan_notification_text)
 
         return Notification.Builder(this, CHANNEL_ID)

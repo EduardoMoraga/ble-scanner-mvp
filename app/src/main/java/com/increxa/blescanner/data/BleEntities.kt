@@ -12,7 +12,8 @@ data class BleSession(
     val endTime: Long? = null,
     val locationLat: Double? = null,
     val locationLng: Double? = null,
-    val notes: String? = null
+    val notes: String? = null,
+    val pdvName: String? = null
 )
 
 @Entity(tableName = "ble_devices")

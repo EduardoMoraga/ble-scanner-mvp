@@ -90,6 +90,12 @@ interface BleDao {
     @Query("SELECT COUNT(*) FROM ble_devices WHERE brand = 'Apple'")
     fun getAppleDeviceCount(): Flow<Int>
 
+    @Query("SELECT COUNT(*) FROM ble_devices WHERE brand = 'Apple' AND isStationary = 0")
+    fun getAppleNonExhibCount(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM ble_devices WHERE isStationary = 1")
+    fun getExhibitionCount(): Flow<Int>
+
     // === Export ===
     @Query("SELECT * FROM ble_scan_results WHERE sessionId = :sessionId ORDER BY timestamp ASC")
     suspend fun getExportDataForSession(sessionId: String): List<BleScanResult>
