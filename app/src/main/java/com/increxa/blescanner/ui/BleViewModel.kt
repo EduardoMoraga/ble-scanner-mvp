@@ -5,17 +5,20 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.increxa.blescanner.BleApplication
 import com.increxa.blescanner.data.BleDevice
+import com.increxa.blescanner.ble.BleScanner
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.ceil
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class BleViewModel(application: Application) : AndroidViewModel(application) {
@@ -54,6 +57,17 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
 
     val avgConfidence: StateFlow<Int?> = repository.getAvgConfidence()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    val appleDeviceCount: StateFlow<Int> = repository.getAppleDeviceCount()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    /** Estimated total people = appleCount / Apple market share (Chile ~35%) */
+    val estimatedPeople: StateFlow<Int> = repository.getAppleDeviceCount()
+        .map { appleCount ->
+            if (appleCount > 0) ceil(appleCount / BleScanner.APPLE_MARKET_SHARE_CL.toDouble()).toInt()
+            else 0
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
     fun onScanStarted(sessionId: String) {
         isScanning.value = true

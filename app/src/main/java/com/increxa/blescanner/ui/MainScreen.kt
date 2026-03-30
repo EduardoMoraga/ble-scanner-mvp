@@ -88,6 +88,7 @@ fun MainScreen(
     val totalUnique by viewModel.totalUniqueDevices.collectAsState()
     val avgDwell by viewModel.avgDwellTimeMs.collectAsState()
     val avgConfidence by viewModel.avgConfidence.collectAsState()
+    val estimatedPeople by viewModel.estimatedPeople.collectAsState()
 
     val fabColor by animateColorAsState(
         if (isScanning) Color(0xFFE53935) else Color(0xFF1E88E5),
@@ -142,6 +143,7 @@ fun MainScreen(
                 totalUnique = totalUnique,
                 avgDwellMs = avgDwell,
                 avgConfidence = avgConfidence,
+                estimatedPeople = estimatedPeople,
                 isScanning = isScanning
             )
 
@@ -177,7 +179,7 @@ fun MainScreen(
 }
 
 @Composable
-fun StatsRow(activeCount: Int, totalUnique: Int, avgDwellMs: Long?, avgConfidence: Int?, isScanning: Boolean) {
+fun StatsRow(activeCount: Int, totalUnique: Int, avgDwellMs: Long?, avgConfidence: Int?, estimatedPeople: Int, isScanning: Boolean) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -188,6 +190,7 @@ fun StatsRow(activeCount: Int, totalUnique: Int, avgDwellMs: Long?, avgConfidenc
         StatCard("Unicos", "$totalUnique", Color(0xFF1E88E5), Modifier.weight(1f))
         StatCard("Perm.", formatDuration(avgDwellMs), Color(0xFFFB8C00), Modifier.weight(1f))
         StatCard("Conf.", "${avgConfidence ?: 0}%", Color(0xFF7B1FA2), Modifier.weight(1f))
+        StatCard("Personas est.", if (estimatedPeople > 0) "$estimatedPeople" else "--", Color(0xFF00897B), Modifier.weight(1f))
     }
 }
 

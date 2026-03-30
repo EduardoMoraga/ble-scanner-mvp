@@ -39,6 +39,13 @@ class BleScanner(private val context: Context) {
         // Indoor path-loss exponent for distance estimation
         private const val PATH_LOSS_N = 2.5
 
+        // Apple market share in Chile (~35%). Used to estimate total foot traffic
+        // from Apple-only BLE counts: estimatedPeople = appleCount / marketShare.
+        // BLE scanning only reliably identifies Apple devices via Continuity protocol.
+        // Android devices use randomized MACs and diverse BLE stacks, making
+        // brand-level attribution less reliable. Source: Counterpoint Research 2025.
+        const val APPLE_MARKET_SHARE_CL = 0.35f
+
         // === MANUFACTURER IDs (Bluetooth SIG) — PHONE brands only ===
         private val BRAND_BY_MFG_ID = mapOf(
             0x004C to "Apple",
@@ -117,7 +124,7 @@ class BleScanner(private val context: Context) {
             0x02 to "iPhone",
             0x03 to "iPad",
             0x04 to "Apple Watch",
-            0x05 to "iPod Touch",
+            0x05 to "iPhone",  // Was iPod Touch (discontinued 2022). Modern 0x05 broadcasts are iPhones.
             0x06 to "Apple TV",
             0x07 to "HomePod",
             0x09 to "MacBook",
@@ -128,7 +135,7 @@ class BleScanner(private val context: Context) {
         )
 
         // Apple device types that are phones (for categorizeAsPhone)
-        private val APPLE_PHONE_TYPES = setOf("iPhone", "iPod Touch")
+        private val APPLE_PHONE_TYPES = setOf("iPhone")
 
         // Apple device types that are definitely NOT phones
         private val APPLE_NON_PHONE_TYPES = setOf(
@@ -153,7 +160,7 @@ class BleScanner(private val context: Context) {
             "monitor", "projector",
             "scale", "toothbrush", "thermometer",
             "tab ", "tab-", "ipad", "tablet", "surface",
-            "macbook", "imac", "laptop",
+            "macbook", "imac", "laptop", "book",  // Samsung Galaxy Book, Lenovo IdeaPad Book, etc.
             "pencil", "magic",  // Apple Pencil, Magic Keyboard/Mouse
         )
 
@@ -564,7 +571,8 @@ class BleScanner(private val context: Context) {
                     // Find My — any Apple device with Find My enabled.
                     // This is extremely common. Cannot distinguish iPhone from iPad/Mac.
                     // Don't return "AirPods" here — Find My is not Proximity Pairing.
-                    foundType = foundType ?: "Apple Device"
+                    // Label as "iPhone (est.)" — ~80% of Apple BLE devices in public are iPhones.
+                    foundType = foundType ?: "iPhone (est.)"
                 }
                 0x07 -> return "AirPods"   // Proximity Pairing (AirPods, Beats)
                 0x05 -> foundType = "iPhone" // AirDrop — usually phone or tablet
@@ -694,7 +702,7 @@ class BleScanner(private val context: Context) {
         // The 1.5m RSSI threshold already filters most iPads/Macs (used at desk distance).
         if (brand == "Apple") {
             if (model != null && model in APPLE_NON_PHONE_TYPES) return false
-            // model is "iPhone", "iPod Touch", "Apple Device", null, or other → accept
+            // model is "iPhone", "iPhone (est.)", null, or other → accept
             return true
         }
 
@@ -780,7 +788,7 @@ class BleScanner(private val context: Context) {
         // Brand/model identification: up to 10 points
         val brandKnown = brand != "Desconocida" && !brand.startsWith("MFG:")
         if (brandKnown) score += 5
-        if (model != null && model != "Apple Device") score += 5
+        if (model != null && !model.contains("est.")) score += 5
 
         return score.coerceIn(0, 100)
     }

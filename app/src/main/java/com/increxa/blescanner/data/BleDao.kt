@@ -87,6 +87,9 @@ interface BleDao {
     @Query("SELECT AVG(confidenceScore) FROM ble_devices WHERE confidenceScore > 0")
     fun getAvgConfidence(): Flow<Int?>
 
+    @Query("SELECT COUNT(*) FROM ble_devices WHERE brand = 'Apple'")
+    fun getAppleDeviceCount(): Flow<Int>
+
     // === Export ===
     @Query("SELECT * FROM ble_scan_results WHERE sessionId = :sessionId ORDER BY timestamp ASC")
     suspend fun getExportDataForSession(sessionId: String): List<BleScanResult>

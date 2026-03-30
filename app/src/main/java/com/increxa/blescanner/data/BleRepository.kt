@@ -26,6 +26,7 @@ class BleRepository(private val dao: BleDao) {
     fun getAvgDwellTimeMs(): Flow<Long?> = dao.getAvgDwellTimeMs()
     fun getTotalScanResults(): Flow<Int> = dao.getTotalScanResults()
     fun getAvgConfidence(): Flow<Int?> = dao.getAvgConfidence()
+    fun getAppleDeviceCount(): Flow<Int> = dao.getAppleDeviceCount()
     fun getAllSessions(): Flow<List<BleSession>> = dao.getAllSessions()
 
     suspend fun startSession(sessionId: String, lat: Double?, lng: Double?, notes: String? = null) {
